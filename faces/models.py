@@ -21,5 +21,5 @@ class FeedForwardNeuralNetModel(nn.Module):
         out = self.linearB(out)
 
         return out
-        
-        
+
+
