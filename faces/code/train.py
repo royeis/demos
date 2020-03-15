@@ -71,6 +71,7 @@ def train(context, processed_data, model_name='model.bst', cuda=False, horovod=F
         optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
         train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=hvd.size(), rank=hvd.rank())
         train_loader = data.DataLoader(dataset, sampler=train_sampler)
+        hvd.broadcast_parameters(model.state_dict(), root_rank=0)
     
     context.logger.info('Starting training process')
     for epoch in range(20):
