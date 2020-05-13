@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils import data
 import torch
+import horovod.torch as hvd
 import importlib.util
 import os
 from pickle import dump
@@ -16,7 +17,14 @@ from mlrun import get_or_create_ctx
 
 def train(context, processed_data, model_name='model.bst'):
     
-    device = torch.device("cpu")
+    hvd.init()
+    
+    try:
+        device = torch.device("cuda")
+    except AssertionError:
+        context.logger.info("Requested running on cuda but no cuda device available. Terminating")
+        exit(1)
+    
     context.logger.info('Client')
     client = v3f.Client('framesd:8081', container="users")
     with open(processed_data.url, 'r') as f:                      
@@ -51,6 +59,15 @@ def train(context, processed_data, model_name='model.bst'):
     dataset = data.TensorDataset(X, y)
     train_loader = data.DataLoader(dataset)
     
+    
+    
+    context.logger.info('preparing for horovod distributed training')
+    torch.cuda.set_device(hvd.local_rank())
+    optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
+    train_sampler = data.distributed.DistributedSampler(dataset, num_replicas=hvd.size(), rank=hvd.rank())
+    train_loader = data.DataLoader(dataset, sampler=train_sampler)
+    hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+    
     context.logger.info('Starting training process')
     for epoch in range(20):
         for features, target in train_loader:
@@ -60,10 +77,12 @@ def train(context, processed_data, model_name='model.bst'):
             loss.backward()
             optimizer.step()
             
-    context.logger.info('Save model')
-    dump(model._modules, open(model_name, 'wb'))
-    context.log_artifact('model', src_path=model_name, target_path=model_name, labels={'framework': 'Pytorch-FeedForwardNN'})
-    os.remove(model_name)
+    
+    if hvd.rank() == 0:
+        context.logger.info('Save model')
+        dump(model._modules, open(model_name, 'wb'))
+        context.log_artifact('model', src_path=model_name, target_path=model_name, labels={'framework': 'Pytorch-FeedForwardNN'})
+        os.remove(model_name)
 
 if __name__ == "__main__":
     context = get_or_create_ctx('train')
